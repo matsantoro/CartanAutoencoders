@@ -1,0 +1,168 @@
+# Import
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+
+# Device config
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print("Device:", device)
+
+# Hyperparameters
+batch_size = 128
+learning_rates = [0.9,0.1]
+num_epochs = 10
+hidden_dim = 64
+num_experiments = 5
+
+# Create folders for saving results
+os.makedirs('training_curves', exist_ok=True)
+os.makedirs('experiment_results', exist_ok=True)
+
+# To store final MSEs for boxplot
+boxplot_data = {lr: [] for lr in learning_rates}
+
+# Dataset
+transform = transforms.ToTensor()
+train_dataset = datasets.MNIST(root='./data', train=True, transform=transform, download=True)
+test_dataset = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
+train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
+
+# Store test MSEs across experiments for boxplot
+all_final_test_losses = {lr: [] for lr in learning_rates}
+
+# Start experiments
+for exp in range(num_experiments):
+    print(f"\n=== Experiment {exp+1}/{num_experiments} ===")
+
+    # Define Linear Autoencoder
+    class LinearAutoencoder(nn.Module):
+        def __init__(self, hidden_dim):
+            super(LinearAutoencoder, self).__init__()
+            self.encoder = nn.Sequential(
+                nn.Linear(28*28, 700),
+                nn.ReLU(),
+                nn.Linear(700, 100),
+                nn.ReLU(),
+                nn.Linear(100, hidden_dim),
+                nn.ReLU()
+            )
+            self.decoder = nn.Sequential(
+                nn.Linear(hidden_dim, 100),
+                nn.ReLU(),
+                nn.Linear(100, 700),
+                nn.ReLU(),
+                nn.Linear(700, 28*28)
+            )
+
+        def forward(self, x):
+            x = x.view(-1, 28*28)
+            encoded = self.encoder(x)
+            decoded = self.decoder(encoded)
+            return decoded
+
+    # Store results
+    test_mse_results = []
+    all_train_losses = {}
+    all_test_losses = {}
+
+    # Try different learning rates
+    for lr in learning_rates:
+        training_loss = []
+        testing_loss = []
+
+        print(f"\nTraining with learning rate: {lr}")
+        model = LinearAutoencoder(hidden_dim).to(device)
+        criterion = nn.MSELoss()
+        optimizer = optim.SGD(model.parameters(), lr=lr)
+
+        # Training loop
+        for epoch in range(num_epochs):
+            model.train()
+            total_loss = 0
+            for images, _ in train_loader:
+                images = images.to(device)
+                outputs = model(images)
+                loss = criterion(outputs, images.view(-1, 28*28))
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+
+            avg_train_loss = total_loss / len(train_loader)
+            training_loss.append(avg_train_loss)
+
+            # Evaluate on test set
+            model.eval()
+            total_test_loss = 0
+            with torch.no_grad():
+                for images, _ in test_loader:
+                    images = images.to(device)
+                    outputs = model(images)
+                    loss = criterion(outputs, images.view(-1, 28*28))
+                    total_test_loss += loss.item()
+            avg_test_loss = total_test_loss / len(test_loader)
+            testing_loss.append(avg_test_loss)
+
+            print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Test Loss: {avg_test_loss:.4f}")
+
+        # Store losses
+        all_train_losses[lr] = training_loss
+        all_test_losses[lr] = testing_loss
+        test_mse_results.append((lr, avg_test_loss))
+        all_final_test_losses[lr].append(avg_test_loss)
+        boxplot_data[lr].append(avg_test_loss)
+
+
+        # Save losses
+        np.savez(f'experiment_results/exp{exp+1}_lr{lr:.3e}.npz',
+                 train=np.array(training_loss),
+                 test=np.array(testing_loss),
+                 final_test=avg_test_loss)
+
+    # Plot all training curves for this experiment
+    plt.figure()
+    for lr, loss_array in all_train_losses.items():
+        plt.plot(range(1, len(loss_array) + 1), loss_array, label=f"lr = {lr}")
+    plt.xlabel("Epoch")
+    plt.ylabel("Training Loss")
+    plt.title(f"Training Losses (Experiment {exp+1})")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f'experiment_results/exp{exp+1}_train_loss_plot.png')
+    plt.close()
+
+    # Best LR for this experiment
+    best_lr = test_mse_results[np.argmin([x[1] for x in test_mse_results])][0]
+    print(f"Best learning rate in Experiment {exp+1}: {best_lr}")
+
+    # Plot training vs test loss for best LR
+    plt.figure()
+    epochs = range(1, len(all_train_losses[best_lr]) + 1)
+    plt.plot(epochs, all_train_losses[best_lr], label="Train Loss")
+    plt.plot(epochs, all_test_losses[best_lr], label="Test Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title(f"Train vs Test Loss (Exp {exp+1}, Best LR = {best_lr})")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f'experiment_results/exp{exp+1}_best_lr_{best_lr:.3e}.png')
+    plt.close()
+
+
+#Print the boxplot to make sure
+print("Boxplot data:", boxplot_data)
+# Final boxplot across experiments
+labels = [f"lr={lr}" for lr in learning_rates]
+data = [boxplot_data[lr] for lr in learning_rates]
+plt.boxplot(data, tick_labels=labels)
+plt.title("Final Test MSE Comparison")
+plt.ylabel("Test MSE")
+plt.grid(True)
+plt.savefig("experiment_results/final_boxplot.png")
+plt.show()
