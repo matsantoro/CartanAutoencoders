@@ -1,88 +1,121 @@
+# Imports
+from torchvision.datasets import MNIST
+from torchvision.transforms import ToTensor
+from torch.utils.data import DataLoader, Subset
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, random_split
+from pathlib import Path
+from itertools import chain
+from tqdm import tqdm
+import numpy as np
+import matplotlib.pyplot as plt
+import sys
 
-# ----- AutoEncoder Architecture -----
-class AutoEncoder(nn.Module):
-    def __init__(self):
-        super(AutoEncoder, self).__init__()
-        self.encoder = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(28 * 28, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-        )
-        self.decoder = nn.Sequential(
-            nn.Linear(64, 128),
-            nn.ReLU(),
-            nn.Linear(128, 28 * 28),
-            nn.Sigmoid(),
-            nn.Unflatten(1, (1, 28, 28))
-        )
-        
+# Set up data 
+from torchvision.datasets import MNIST
+from torchvision.transforms import ToTensor
+from torch.utils.data import DataLoader
+from pathlib import Path
 
-    def forward(self, x):
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
+train_dataset = MNIST(root=Path('data/'), download=True, train=True, transform=ToTensor())
+test_dataset = MNIST(root=Path('data/'), download=True, train=False, transform=ToTensor())
 
-# ----- Data Loading -----
-transform = transforms.ToTensor()
-dataset = datasets.MNIST(root="./data", train=True, download=True, transform=transform)
-train_set, val_set = random_split(dataset, [50000, 10000])
-train_loader = DataLoader(train_set, batch_size=64, shuffle=True)
-val_loader = DataLoader(val_set, batch_size=64)
+train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True, pin_memory=True, drop_last=True)
+test_dataloader = DataLoader(test_dataset, batch_size=10000)
 
-# ----- Model, Loss, Optimizer -----
-model = AutoEncoder()
-criterion = nn.MSELoss()
-optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+# Import hyperbolic model
+sys.path.append('CartanNetworks/code')
+from models import HyperbolicNetwork
+from layers import DmELU
 
-# ----- Early Stopping -----
-best_val_loss = float('inf')
-epochs_no_improve = 0
-early_stop_patience = 10
+hyp_encoder = HyperbolicNetwork(size=28*28, layer_size_list=[100+1, 5], activation=DmELU, head=torch.nn.Identity()).cuda()
+hyp_decoder = HyperbolicNetwork(size=5, layer_size_list=[10 + 1, 28*28 + 1], activation=DmELU, head=torch.nn.Identity()).cuda()
 
-# ----- Training Loop -----
-max_epochs = 100
+# Optimizer and loss
+from geoopt.optim import RiemannianAdam
+criterion = torch.nn.MSELoss()
+optimizer = RiemannianAdam(params=chain(hyp_encoder.parameters(), hyp_decoder.parameters()), lr=1e-3, weight_decay=1e-4)
 
-for epoch in range(max_epochs):
-    model.train()
-    running_loss = 0.0
-    for batch in train_loader:
-        inputs, _ = batch
-        outputs = model(inputs)
-        loss = criterion(outputs, inputs)
+# Training loop with early stopping
+epochs = 100
+early_stop_window = 10
+test_losses = []
+early_stopped = False
+pbar = tqdm(range(epochs))
 
+for epoch in pbar:
+    train_losses = []
+    for data, label in train_dataloader:
         optimizer.zero_grad()
+        hyp_encoder.zero_grad()
+        hyp_decoder.zero_grad()
+
+        data = data.flatten(start_dim=1).cuda()
+        latent = hyp_encoder(data)
+        recon = hyp_decoder(latent)
+
+        loss = criterion(data, recon[..., 1:])
         loss.backward()
         optimizer.step()
 
-        running_loss += loss.item() * inputs.size(0)
-    epoch_loss = running_loss / len(train_loader.dataset)
+        train_losses.append(loss.cpu().detach().numpy())
 
-    # ----- Validation -----
-    model.eval()
-    val_loss = 0.0
-    with torch.no_grad():
-        for batch in val_loader:
-            inputs, _ = batch
-            outputs = model(inputs)
-            loss = criterion(outputs, inputs)
-            val_loss += loss.item() * inputs.size(0)
-    val_loss /= len(val_loader.dataset)
+    tl = sum(train_losses) / len(train_losses)
 
-    print(f"Epoch {epoch+1}, Train Loss: {epoch_loss:.4f}, Val Loss: {val_loss:.4f}")
+    # Test loss
+    for data, _ in test_dataloader:
+        with torch.no_grad():
+            data = data.flatten(start_dim=1).cuda()
+            recon = hyp_decoder(hyp_encoder(data))
+            test_loss = criterion(data, recon[..., 1:])
 
-    # ----- Early Stopping Check -----
-    if val_loss < best_val_loss:
-        best_val_loss = val_loss
-        epochs_no_improve = 0
-    else:
-        epochs_no_improve += 1
+    test_losses.append(test_loss.item())
+    pbar.set_description(f"Train loss: {tl:.4f}, Test loss: {test_loss.item():.4f}")
 
-    if epochs_no_improve >= early_stop_patience:
-        print(f"Early stopping triggered at epoch {epoch+1}")
-        break
+    # Early stopping
+    if len(test_losses) >= early_stop_window + 1:
+        last_test = test_losses[-1]
+        prev_window = test_losses[-early_stop_window-1:-1]
+        if all(last_test >= prev for prev in prev_window):
+            print(f"\n🛑 Early stopping triggered at epoch {epoch + 1}")
+            early_stopped = True
+            break
+
+if not early_stopped:
+    print(f"\n✅ Training completed all {epochs} epochs without early stopping.")
+
+# Plot example reconstructions
+for item, _ in list(iter(test_dataloader)):
+    for image in range(10):
+        fig = plt.figure()
+        axes = fig.subplots(nrows=1, ncols=2)
+        axes[0].imshow(item[image, 0, ...].detach().cpu().numpy(), cmap='gray')
+        axes[1].imshow(hyp_decoder(hyp_encoder(item.flatten(start_dim=1).cuda()))[image, 1:].reshape(28, 28).cpu().detach().numpy(), cmap='gray')
+        if not image:
+            axes[0].set_title('Original')
+            axes[1].set_title('Rec Hyp')
+        fig.show()
+
+# Save one photo with all original + hyperbolic reconstructions
+item, _ = next(iter(test_dataloader))
+data_flat = item.flatten(start_dim=1).cuda()
+
+with torch.no_grad():
+    hyp_recon = hyp_decoder(hyp_encoder(data_flat)).cpu()
+
+num_images = 10
+fig, axes = plt.subplots(nrows=num_images, ncols=2, figsize=(8, 2.5 * num_images))
+
+for i in range(num_images):
+    axes[i, 0].imshow(item[i, 0].numpy(), cmap='gray')
+    axes[i, 0].axis('off')
+    if i == 0:
+        axes[i, 0].set_title('Original')
+
+    axes[i, 1].imshow(hyp_recon[i, 1:].reshape(28, 28).numpy(), cmap='gray')
+    axes[i, 1].axis('off')
+    if i == 0:
+        axes[i, 1].set_title('Rec Hyp')
+
+plt.tight_layout()
+plt.savefig("comparison_results.png")
+plt.show()

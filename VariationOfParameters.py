@@ -9,7 +9,6 @@ from pathlib import Path
 import sys
 from itertools import chain
 from tqdm import tqdm
-
 sys.path.append('CartanNetworks/code')
 from models import HyperbolicNetwork
 from layers import DmELU
@@ -56,6 +55,7 @@ def build_hyperbolic_autoencoder(hidden_layers, latent_dim=5):
     decoder = HyperbolicNetwork(size=latent_dim, layer_size_list=layer_list_dec, activation=DmELU, head=torch.nn.Identity()).to(device)
     return encoder, decoder
 
+
 # Training Euclidean
 def train_euclidean(encoder, decoder, train_loader, lr, epochs=10):
     optimizer = torch.optim.Adam(chain(encoder.parameters(), decoder.parameters()), lr=lr, weight_decay=1e-4)
@@ -75,6 +75,7 @@ def train_euclidean(encoder, decoder, train_loader, lr, epochs=10):
             losses.append(loss.item())
         epoch_losses.append(sum(losses)/len(losses))
     return epoch_losses
+
 
 # Training Hyperbolic
 def train_hyperbolic(encoder, decoder, train_loader, lr, epochs=10):
@@ -96,6 +97,7 @@ def train_hyperbolic(encoder, decoder, train_loader, lr, epochs=10):
         epoch_losses.append(sum(losses)/len(losses))
     return epoch_losses
 
+
 # Evaluation function 
 def evaluate_loss(encoder, decoder, test_loader, is_hyperbolic=False):
     encoder.eval(); decoder.eval()
@@ -108,6 +110,7 @@ def evaluate_loss(encoder, decoder, test_loader, is_hyperbolic=False):
                 recon = recon[..., 1:]
             loss = criterion(recon, data)
             return loss.item(), recon.cpu(), data.cpu()
+
 
 # Visualization
 def visualize_reconstructions(orig_batch, eucl_batch, hyp_batch, lr, layers_str, eucl_loss, hyp_loss):
@@ -131,10 +134,11 @@ def visualize_reconstructions(orig_batch, eucl_batch, hyp_batch, lr, layers_str,
     plt.savefig(f"reconstructions_lr{lr}_layers{layers_str.replace(' ', '_')}.png")
     plt.close()
 
+
 # Hyperparameters
-learning_rates = [1e-1,o.9,1]
-layer_configs = [[100], [100, 50],[100,50,25]]
-epochs = 100
+learning_rates = [1e-1]#,o.9,1]
+layer_configs = [[100], [100, 50]]#,[100,50,25]]
+epochs = 3
 
 # Store results
 all_train_losses = {}
@@ -174,6 +178,18 @@ for lr, layers in product(learning_rates, layer_configs):
     _, e_recon, orig = evaluate_loss(eucl_encoder, eucl_decoder, test_dataloader)
     _, h_recon, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
     visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", eucl_test[-1], hyp_test[-1])
+    import csv
+
+    # Create the file
+    filename = f"losses_lr{lr}_layers{'-'.join(map(str, layers))}.csv"
+    with open(filename, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Euclidean Train Loss", "Hyperbolic Train Loss", "Euclidean Test Loss", "Hyperbolic Test Loss"])
+        for et, ht, eTe, hTe in zip(eucl_train, hyp_train, eucl_test, hyp_test):
+           writer.writerow([et, ht, eTe, hTe])
+    # Save the losses
+    visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", eucl_test[-1], hyp_test[-1])
+
 
 # Plot train loss
 plt.figure(figsize=(12, 6))

@@ -160,7 +160,7 @@ print("Boxplot data:", boxplot_data)
 # Final boxplot across experiments
 labels = [f"lr={lr}" for lr in learning_rates]
 data = [boxplot_data[lr] for lr in learning_rates]
-plt.boxplot(data, tick_labels=labels)
+plt.boxplot(data, labels=labels)
 plt.title("Final Test MSE Comparison")
 plt.ylabel("Test MSE")
 plt.grid(True)

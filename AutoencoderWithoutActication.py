@@ -14,7 +14,7 @@ print(device)
 
 # Hyperparameters
 batch_size = 128
-learning_rates = [0.9,0.1]
+learning_rates = [0.9,0.1,0.01]
 num_epochs = 10
 hidden_dim = 64
 
@@ -29,8 +29,8 @@ test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=Fa
 class LinearAutoencoder(nn.Module):
     def __init__(self, hidden_dim):
         super(LinearAutoencoder, self).__init__()
-        self.encoder = nn.Sequential(nn.Linear(28*28, 700),nn.ReLU(), nn.Linear(700, 100),nn.ReLU(),nn.Linear(100, 64), nn.ReLU())
-        self.decoder = nn.Sequential(nn.Linear(64, 100),  nn.ReLU(), nn.Linear(100, 700), nn.ReLU(), nn.Linear(700, 28*28) )
+        self.encoder = nn.Linear(28*28, hidden_dim)
+        self.decoder = nn.Linear(hidden_dim, 28*28)
 
     def forward(self, x):
         x = x.view(-1, 28*28)
