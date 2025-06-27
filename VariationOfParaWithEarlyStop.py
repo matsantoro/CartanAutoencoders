@@ -19,18 +19,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load MNIST
 dataset_train = MNIST(root=Path('data/'), download=True, train = True, transform=ToTensor())
-train_dataloader = DataLoader(
-    dataset_train,
-    batch_size=64,
-    shuffle=True,
-    pin_memory=True,
-    drop_last=True
-)
+train_dataloader = DataLoader( dataset_train,batch_size=64,shuffle=True,pin_memory=True,drop_last=True)
 dataset_test = MNIST(root=Path('data/'), download=True, train=False, transform=ToTensor())
-test_dataloader = DataLoader(
-    dataset_test,
-    batch_size=10000,
-)
+test_dataloader = DataLoader(dataset_test,batch_size=10000)
+
  
 # Euclidean autoencoder builder
 def build_euclidean_autoencoder(hidden_layers, latent_dim=5):
@@ -134,13 +126,14 @@ def visualize_reconstructions(orig_batch, eucl_batch, hyp_batch, lr, layers_str,
 
 
 # Hyperparameters
-learning_rates = [1e-4,1e-3,1e-2,o.9]
+learning_rates = [1e-2,1e-3,1e-4,o.9]
 layer_configs = [[100], [100, 50],[100,50,25]]
 epochs = 100
 early_stop_window = 10
 test_losses = []
 euc_early_stopped = False
 hyp_early_stopped = False
+num_experiments=5
 
 # Store results
 all_train_losses = {}
@@ -149,93 +142,92 @@ all_test_losses = {}
 
 # Loops
 for lr, layers in product(learning_rates, layer_configs):
-    print(f"\n=== Experiment: LR={lr}, Layers={layers} ===")
-    eucl_encoder, eucl_decoder = build_euclidean_autoencoder(layers)
-    hyp_encoder, hyp_decoder = build_hyperbolic_autoencoder(layers)
+    for exp in range(num_experiments):
+        print(f"\n=== Experiment {exp+1}/{num_experiments}: LR={lr}, Layers={layers} ===")
+        eucl_encoder, eucl_decoder = build_euclidean_autoencoder(layers)
+        hyp_encoder, hyp_decoder = build_hyperbolic_autoencoder(layers)
+        eucl_train, hyp_train = [], []
+        eucl_test, hyp_test = [], []
+        print("Euclidean Model")
+        optimizer = torch.optim.Adam(chain(eucl_encoder.parameters(), eucl_decoder.parameters()), lr=lr, weight_decay=1e-4)
+        criterion = torch.nn.MSELoss()
+        eucl_encoder.train(); eucl_decoder.train()
+        for epoch in range(epochs):
+            e_loss = train_euclidean(eucl_encoder, eucl_decoder, train_dataloader, lr)[0]
+            eucl_train.append(e_loss)
+            e_test_loss, _, _ = evaluate_loss(eucl_encoder, eucl_decoder, test_dataloader)
+            eucl_test.append(e_test_loss)
+            print(f"Epoch {epoch+1}/{epochs}: Euclidean Train={e_loss:.4f} Test={e_test_loss:.4f}")
+            # Early stopping
+            if len(eucl_test) >= early_stop_window + 1 :
+                last_eucl_test = eucl_test[-1]
+                prev_eucl_window = eucl_test[-early_stop_window-1:-1]
 
-    eucl_train, hyp_train = [], []
-    eucl_test, hyp_test = [], []
-    print("Euclidean Model")
-    optimizer = torch.optim.Adam(chain(eucl_encoder.parameters(), eucl_decoder.parameters()), lr=lr, weight_decay=1e-4)
-    criterion = torch.nn.MSELoss()
-    eucl_encoder.train(); eucl_decoder.train()
-    for epoch in range(epochs):
-        e_loss = train_euclidean(eucl_encoder, eucl_decoder, train_dataloader, lr)[0]
-        eucl_train.append(e_loss)
+                if all(last_eucl_test >= prev for prev in prev_eucl_window):
+                    print(f"\n🛑 Early stopping for the Euclidean triggered at epoch {epoch + 1}")
+                    euc_early_stopped = True
+                    for i in range (epoch+1, 100):
+                        eucl_test.append(last_eucl_test) 
+                        eucl_train.append(eucl_train[-1])
+                    break
+        if not euc_early_stopped:
+            print(f"\n✅ Training Euclidean Autoencoder completed all {epochs} epochs without early stopping.")
 
-        e_test_loss, _, _ = evaluate_loss(eucl_encoder, eucl_decoder, test_dataloader)
-        eucl_test.append(e_test_loss)
-        print(f"Epoch {epoch+1}/{epochs}: Euclidean Train={e_loss:.4f} Test={e_test_loss:.4f}")
-        
-        # Early stopping
-        if len(eucl_test) >= early_stop_window + 1 :
-            last_eucl_test = eucl_test[-1]
-            prev_eucl_window = eucl_test[-early_stop_window-1:-1]
 
-            if all(last_eucl_test >= prev for prev in prev_eucl_window):
-               print(f"\n🛑 Early stopping for the Euclidean triggered at epoch {epoch + 1}")
-               euc_early_stopped = True
-               for i in range (epoch+1, 100):
-                  eucl_test.append(last_eucl_test) 
-                  eucl_train.append(eucl_train[-1])
-               break
-    if not euc_early_stopped:
-       print(f"\n✅ Training Euclidean Autoencoder completed all {epochs} epochs without early stopping.")
-    
-    
-    
-    #Hyperbolic loop
-    print("Hyperbolic Model")
-    optimizer = RiemannianAdam(chain(hyp_encoder.parameters(), hyp_decoder.parameters()), lr=lr, weight_decay=1e-4)
-    criterion = torch.nn.MSELoss()
-    hyp_encoder.train(); hyp_decoder.train()
-    for epoch in range(epochs):
-        h_loss = train_hyperbolic(hyp_encoder, hyp_decoder, train_dataloader, lr)[0]
-        hyp_train.append(h_loss)
 
-        h_test_loss, _, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
-        hyp_test.append(h_test_loss)
-        print(f"Epoch {epoch+1}/{epochs}: Hyperbolic Train={h_loss:.4f} Test={h_test_loss:.4f}")
-        
-        # Early stopping
-        if len(hyp_test) >= early_stop_window + 1 :
-            last_hyp_test = hyp_test[-1]
-            prev_hyp_window = hyp_test[-early_stop_window-1:-1]
+        #Hyperbolic loop
+        print("Hyperbolic Model")
+        optimizer = RiemannianAdam(chain(hyp_encoder.parameters(), hyp_decoder.parameters()), lr=lr, weight_decay=1e-4)
+        criterion = torch.nn.MSELoss()
+        hyp_encoder.train(); hyp_decoder.train()
+        for epoch in range(epochs):
+            h_loss = train_hyperbolic(hyp_encoder, hyp_decoder, train_dataloader, lr)[0]
+            hyp_train.append(h_loss)
 
-            if all(last_hyp_test >= prev for prev in prev_hyp_window):
-               print(f"\n🛑 Early stopping triggered at epoch {epoch + 1}")
-               hyp_early_stopped = True
-               for i in range (epoch+1, 100):
-                  hyp_test.append(last_hyp_test) 
-                  hyp_train.append(hyp_train[-1])
-               break
-    if not hyp_early_stopped:
-       print(f"\n✅ Training Hyperbolic Autoencoder completed all {epochs} epochs without early stopping.")
-    
-    
-    # Save
-    key_e = f"Euclidean_lr{lr}_layers{'-'.join(map(str,layers))}"
-    key_h = f"Hyperbolic_lr{lr}_layers{'-'.join(map(str,layers))}"
-    all_train_losses[key_e] = eucl_train
-    all_test_losses[key_e] = eucl_test
-    all_train_losses[key_h] = hyp_train
-    all_test_losses[key_h] = hyp_test
+            h_test_loss, _, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
+            hyp_test.append(h_test_loss)
+            print(f"Epoch {epoch+1}/{epochs}: Hyperbolic Train={h_loss:.4f} Test={h_test_loss:.4f}")
+            
+            # Early stopping
+            if len(hyp_test) >= early_stop_window + 1 :
+                last_hyp_test = hyp_test[-1]
+                prev_hyp_window = hyp_test[-early_stop_window-1:-1]
 
-    # Visualize reconstructions
-    _, e_recon, orig = evaluate_loss(eucl_encoder, eucl_decoder, test_dataloader)
-    _, h_recon, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
-    visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", eucl_test[-1], hyp_test[-1])
-    import csv
+                if all(last_hyp_test >= prev for prev in prev_hyp_window):
+                    print(f"\n🛑 Early stopping triggered at epoch {epoch + 1}")
+                    hyp_early_stopped = True
+                    for i in range (epoch+1, 100):
+                        hyp_test.append(last_hyp_test) 
+                        hyp_train.append(hyp_train[-1])
+                    break
+        if not hyp_early_stopped:
+            print(f"\n✅ Training Hyperbolic Autoencoder completed all {epochs} epochs without early stopping.")
 
-    # Create the file
-    filename = f"losses_lr{lr}_layers{'-'.join(map(str, layers))}.csv"
-    with open(filename, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["Euclidean Train Loss", "Hyperbolic Train Loss", "Euclidean Test Loss", "Hyperbolic Test Loss"])
-        for et, ht, eTe, hTe in zip(eucl_train, hyp_train, eucl_test, hyp_test):
-           writer.writerow([et, ht, eTe, hTe])
-    # Save the losses
-    visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", eucl_test[-1], hyp_test[-1])
+
+        # Save
+        key_e = f"Experiment {exp+1}_Euclidean_lr{lr}_layers{'-'.join(map(str,layers))}"
+        key_h = f"Experiment {exp+1}_Hyperbolic_lr{lr}_layers{'-'.join(map(str,layers))}"
+        all_train_losses[key_e] = eucl_train
+        all_test_losses[key_e] = eucl_test
+        all_train_losses[key_h] = hyp_train
+        all_test_losses[key_h] = hyp_test
+
+        # Visualize reconstructions
+        _, e_recon, orig = evaluate_loss(eucl_encoder, eucl_decoder, test_dataloader)
+        _, h_recon, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
+        visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", eucl_test[-1], hyp_test[-1])
+        import csv
+
+        # Create the file
+        filename = f"Experiment_{exp+1}_losses_lr{lr}_layers{'-'.join(map(str, layers))}.csv"
+        with open(filename, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(["Euclidean Train Loss", "Hyperbolic Train Loss", "Euclidean Test Loss", "Hyperbolic Test Loss"])
+            for et, ht, eTe, hTe in zip(eucl_train, hyp_train, eucl_test, hyp_test):
+                writer.writerow([et, ht, eTe, hTe])
+        # Save the losses
+        visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", eucl_test[-1], hyp_test[-1])
+
 
 
 # Plot train loss

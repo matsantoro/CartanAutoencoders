@@ -18,10 +18,19 @@ from geoopt.optim import RiemannianAdam
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load MNIST
-dataset_train = MNIST(root=Path('data/'), download=True, train=True, transform=ToTensor())
-train_dataloader = DataLoader(dataset_train, batch_size=64, shuffle=True, pin_memory=True, drop_last=True)
+dataset_train = MNIST(root=Path('data/'), download=True, train = True, transform=ToTensor())
+train_dataloader = DataLoader(
+    dataset_train,
+    batch_size=64,
+    shuffle=True,
+    pin_memory=True,
+    drop_last=True
+)
 dataset_test = MNIST(root=Path('data/'), download=True, train=False, transform=ToTensor())
-test_dataloader = DataLoader(dataset_test, batch_size=10000)
+test_dataloader = DataLoader(
+    dataset_test,
+    batch_size=10000,
+)
 
 # Euclidean autoencoder builder
 def build_euclidean_autoencoder(hidden_layers, latent_dim=5):
@@ -57,7 +66,7 @@ def build_hyperbolic_autoencoder(hidden_layers, latent_dim=5):
 
 
 # Training Euclidean
-def train_euclidean(encoder, decoder, train_loader, lr, epochs=10):
+def train_euclidean(encoder, decoder, train_loader, lr, epochs):
     optimizer = torch.optim.Adam(chain(encoder.parameters(), decoder.parameters()), lr=lr, weight_decay=1e-4)
     criterion = torch.nn.MSELoss()
     encoder.train(); decoder.train()
@@ -78,7 +87,7 @@ def train_euclidean(encoder, decoder, train_loader, lr, epochs=10):
 
 
 # Training Hyperbolic
-def train_hyperbolic(encoder, decoder, train_loader, lr, epochs=10):
+def train_hyperbolic(encoder, decoder, train_loader, lr, epochs):
     optimizer = RiemannianAdam(chain(encoder.parameters(), decoder.parameters()), lr=lr, weight_decay=1e-4)
     criterion = torch.nn.MSELoss()
     encoder.train(); decoder.train()
@@ -136,9 +145,9 @@ def visualize_reconstructions(orig_batch, eucl_batch, hyp_batch, lr, layers_str,
 
 
 # Hyperparameters
-learning_rates = [1e-1]#,o.9,1]
-layer_configs = [[100], [100, 50]]#,[100,50,25]]
-epochs = 3
+learning_rates = [1e-4,1e-3,1e-2,o.9]
+layer_configs = [[100], [100, 50], [100,50,25]]
+epochs = 100
 
 # Store results
 all_train_losses = {}
@@ -163,7 +172,6 @@ for lr, layers in product(learning_rates, layer_configs):
         h_test_loss, _, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
         eucl_test.append(e_test_loss)
         hyp_test.append(h_test_loss)
-
         print(f"Epoch {epoch+1}/{epochs}: Euclidean Train={e_loss:.4f} Test={e_test_loss:.4f} | Hyperbolic Train={h_loss:.4f} Test={h_test_loss:.4f}")
 
     # Save
