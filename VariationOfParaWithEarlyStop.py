@@ -14,6 +14,8 @@ from models import HyperbolicNetwork
 from layers import DmELU
 from geoopt.optim import RiemannianAdam
 
+results_folder = Path('results')
+
 # Device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -50,15 +52,14 @@ def build_euclidean_autoencoder(hidden_layers, latent_dim=5):
 
 # Hyperbolic autoencoder builder
 def build_hyperbolic_autoencoder(hidden_layers, latent_dim=5):
-    layer_list_enc = [h + 1 for h in hidden_layers] + [latent_dim]
+    layer_list_enc = hidden_layers + [latent_dim]
     encoder = HyperbolicNetwork(size=28*28, layer_size_list=layer_list_enc, activation=DmELU, head=torch.nn.Identity()).to(device)
-    layer_list_dec = [10 + 1] + [28*28 + 1]
+    layer_list_dec = list(reversed(hidden_layers))[1:] + [28*28+1]
     decoder = HyperbolicNetwork(size=latent_dim, layer_size_list=layer_list_dec, activation=DmELU, head=torch.nn.Identity()).to(device)
     return encoder, decoder
 
 # Training Euclidean
-def train_euclidean(encoder, decoder, train_loader, lr):
-    epoch_losses = []
+def train_euclidean(encoder, decoder, train_loader, optimizer, criterion):
     losses = []
     for data, _ in train_loader:
         data = data.flatten(start_dim=1).to(device)
@@ -69,12 +70,10 @@ def train_euclidean(encoder, decoder, train_loader, lr):
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
-    epoch_losses.append(sum(losses)/len(losses))
-    return epoch_losses
+    return sum(losses)/len(losses)
 
 # Training Hyperbolic
-def train_hyperbolic(encoder, decoder, train_loader, lr):
-    epoch_losses = []
+def train_hyperbolic(encoder, decoder, train_loader, optimizer, criterion):
     losses = []
     for data, _ in train_loader:
         data = data.flatten(start_dim=1).to(device)
@@ -85,8 +84,7 @@ def train_hyperbolic(encoder, decoder, train_loader, lr):
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
-    epoch_losses.append(sum(losses)/len(losses))
-    return epoch_losses
+    return sum(losses)/len(losses)
 
 
 # Evaluation function 
@@ -121,14 +119,15 @@ def visualize_reconstructions(orig_batch, eucl_batch, hyp_batch, lr, layers_str,
     fig.suptitle(f"LR={lr} Layers={layers_str}\nReconstruction Loss - Eucl: {eucl_loss:.4f}, Hyp: {hyp_loss:.4f}", fontsize=12)
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
-    plt.savefig(f"reconstructions_lr{lr}_layers{layers_str.replace(' ', '_')}.png")
+    plt.savefig(results_folder/f"reconstructions_lr{lr}_layers{layers_str.replace(' ', '_')}.png")
     plt.close()
 
 
 # Hyperparameters
-learning_rates = [1e-2,1e-3,1e-4,o.9]
+learning_rates = [1e-2,1e-3,1e-4, 0.9]
 layer_configs = [[100], [100, 50],[100,50,25]]
-epochs = 100
+hidden_dimension_configs = [5,10,20]
+epochs = 500
 early_stop_window = 10
 test_losses = []
 euc_early_stopped = False
@@ -141,11 +140,11 @@ all_test_losses = {}
 
 
 # Loops
-for lr, layers in product(learning_rates, layer_configs):
+for lr, layers, hd in product(learning_rates, layer_configs, hidden_dimension_configs):
     for exp in range(num_experiments):
         print(f"\n=== Experiment {exp+1}/{num_experiments}: LR={lr}, Layers={layers} ===")
-        eucl_encoder, eucl_decoder = build_euclidean_autoencoder(layers)
-        hyp_encoder, hyp_decoder = build_hyperbolic_autoencoder(layers)
+        eucl_encoder, eucl_decoder = build_euclidean_autoencoder(layers, latent_dim=hd)
+        hyp_encoder, hyp_decoder = build_hyperbolic_autoencoder(layers, latent_dim=hd)
         eucl_train, hyp_train = [], []
         eucl_test, hyp_test = [], []
         print("Euclidean Model")
@@ -153,7 +152,7 @@ for lr, layers in product(learning_rates, layer_configs):
         criterion = torch.nn.MSELoss()
         eucl_encoder.train(); eucl_decoder.train()
         for epoch in range(epochs):
-            e_loss = train_euclidean(eucl_encoder, eucl_decoder, train_dataloader, lr)[0]
+            e_loss = train_euclidean(eucl_encoder, eucl_decoder, train_dataloader, optimizer, criterion)
             eucl_train.append(e_loss)
             e_test_loss, _, _ = evaluate_loss(eucl_encoder, eucl_decoder, test_dataloader)
             eucl_test.append(e_test_loss)
@@ -181,7 +180,7 @@ for lr, layers in product(learning_rates, layer_configs):
         criterion = torch.nn.MSELoss()
         hyp_encoder.train(); hyp_decoder.train()
         for epoch in range(epochs):
-            h_loss = train_hyperbolic(hyp_encoder, hyp_decoder, train_dataloader, lr)[0]
+            h_loss = train_hyperbolic(hyp_encoder, hyp_decoder, train_dataloader, optimizer, criterion)
             hyp_train.append(h_loss)
 
             h_test_loss, _, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
@@ -219,7 +218,7 @@ for lr, layers in product(learning_rates, layer_configs):
         import csv
 
         # Create the file
-        filename = f"Experiment_{exp+1}_losses_lr{lr}_layers{'-'.join(map(str, layers))}.csv"
+        filename = results_folder/f"Experiment_{exp+1}_losses_lr{lr}_layers{'-'.join(map(str, layers))}.csv"
         with open(filename, mode='w', newline='') as file:
             writer = csv.writer(file)
             writer.writerow(["Euclidean Train Loss", "Hyperbolic Train Loss", "Euclidean Test Loss", "Hyperbolic Test Loss"])
@@ -239,7 +238,7 @@ plt.xlabel("Epoch")
 plt.ylabel("MSE Loss")
 plt.legend()
 plt.grid(True)
-plt.savefig("train_loss_curves.png")
+plt.savefig(results_folder/"train_loss_curves.png")
 plt.show()
 
 # Plot test loss
@@ -251,5 +250,5 @@ plt.xlabel("Epoch")
 plt.ylabel("MSE Loss")
 plt.legend()
 plt.grid(True)
-plt.savefig("test_loss_curves.png")
+plt.savefig(results_folder/"test_loss_curves.png")
 plt.show()
