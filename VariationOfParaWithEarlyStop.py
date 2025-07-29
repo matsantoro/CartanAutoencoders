@@ -102,7 +102,7 @@ def evaluate_loss(encoder, decoder, test_loader, is_hyperbolic=False):
 
 
 # Visualization
-def visualize_reconstructions(orig_batch, eucl_batch, hyp_batch, lr, layers_str, eucl_loss, hyp_loss):
+def visualize_reconstructions(orig_batch, eucl_batch, hyp_batch, lr, layers_str, hd, eucl_loss, hyp_loss):
     fig, axes = plt.subplots(len(orig_batch), 3, figsize=(6, len(orig_batch)*2))
     for i in range(len(orig_batch)):
         axes[i, 0].imshow(orig_batch[i].numpy().reshape(28, 28), cmap='gray')
@@ -119,12 +119,12 @@ def visualize_reconstructions(orig_batch, eucl_batch, hyp_batch, lr, layers_str,
     fig.suptitle(f"LR={lr} Layers={layers_str}\nReconstruction Loss - Eucl: {eucl_loss:.4f}, Hyp: {hyp_loss:.4f}", fontsize=12)
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
-    plt.savefig(results_folder/f"reconstructions_lr{lr}_layers{layers_str.replace(' ', '_')}.png")
+    plt.savefig(results_folder/f"reconstructions_lr{lr}_layers{layers_str.replace(' ', '_')}_hd{hd}.png")
     plt.close()
 
 
 # Hyperparameters
-learning_rates = [1e-2,1e-3,1e-4, 0.9]
+learning_rates = [1e-2,1e-3,1e-4]
 layer_configs = [[100], [100, 50],[100,50,25]]
 hidden_dimension_configs = [5,10,20]
 epochs = 500
@@ -204,8 +204,8 @@ for lr, layers, hd in product(learning_rates, layer_configs, hidden_dimension_co
 
 
         # Save
-        key_e = f"Experiment {exp+1}_Euclidean_lr{lr}_layers{'-'.join(map(str,layers))}"
-        key_h = f"Experiment {exp+1}_Hyperbolic_lr{lr}_layers{'-'.join(map(str,layers))}"
+        key_e = f"Experiment {exp+1}_Euclidean_lr{lr}_layers{'-'.join(map(str,layers))}_hd{hd}"
+        key_h = f"Experiment {exp+1}_Hyperbolic_lr{lr}_layers{'-'.join(map(str,layers))}_hd{hd}"
         all_train_losses[key_e] = eucl_train
         all_test_losses[key_e] = eucl_test
         all_train_losses[key_h] = hyp_train
@@ -214,18 +214,18 @@ for lr, layers, hd in product(learning_rates, layer_configs, hidden_dimension_co
         # Visualize reconstructions
         _, e_recon, orig = evaluate_loss(eucl_encoder, eucl_decoder, test_dataloader)
         _, h_recon, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
-        visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", eucl_test[-1], hyp_test[-1])
+        visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", hd, eucl_test[-1], hyp_test[-1])
         import csv
 
         # Create the file
-        filename = results_folder/f"Experiment_{exp+1}_losses_lr{lr}_layers{'-'.join(map(str, layers))}.csv"
+        filename = results_folder/f"Experiment_{exp+1}_losses_lr{lr}_layers{'-'.join(map(str, layers))}_hd{hd}.csv"
         with open(filename, mode='w', newline='') as file:
             writer = csv.writer(file)
             writer.writerow(["Euclidean Train Loss", "Hyperbolic Train Loss", "Euclidean Test Loss", "Hyperbolic Test Loss"])
             for et, ht, eTe, hTe in zip(eucl_train, hyp_train, eucl_test, hyp_test):
                 writer.writerow([et, ht, eTe, hTe])
         # Save the losses
-        visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", eucl_test[-1], hyp_test[-1])
+        visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", hd, eucl_test[-1], hyp_test[-1])
 
 
 
@@ -252,3 +252,4 @@ plt.legend()
 plt.grid(True)
 plt.savefig(results_folder/"test_loss_curves.png")
 plt.show()
+
