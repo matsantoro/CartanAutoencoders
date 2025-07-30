@@ -1,6 +1,6 @@
 # Imports
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchvision.datasets import MNIST
 from torchvision.transforms import ToTensor
 from itertools import product
@@ -13,6 +13,9 @@ sys.path.append('CartanNetworks/code')
 from models import HyperbolicNetwork
 from layers import DmELU
 from geoopt.optim import RiemannianAdam
+from PGTS import HyperbolicAlgebra
+algebra_object=HyperbolicAlgebra()
+
 
 results_folder = Path('results')
 
@@ -25,7 +28,7 @@ train_dataloader = DataLoader( dataset_train,batch_size=64,shuffle=True,pin_memo
 dataset_test = MNIST(root=Path('data/'), download=True, train=False, transform=ToTensor())
 test_dataloader = DataLoader(dataset_test,batch_size=10000)
 
- 
+
 # Euclidean autoencoder builder
 def build_euclidean_autoencoder(hidden_layers, latent_dim=5):
     layers_encoder = []
@@ -37,7 +40,6 @@ def build_euclidean_autoencoder(hidden_layers, latent_dim=5):
     layers_encoder.append(torch.nn.Linear(input_dim, latent_dim))
     layers_encoder.append(torch.nn.ReLU())
     encoder = torch.nn.Sequential(*layers_encoder).to(device)
-
     layers_decoder = []
     input_dim = latent_dim
     for h in reversed(hidden_layers):
@@ -73,14 +75,14 @@ def train_euclidean(encoder, decoder, train_loader, optimizer, criterion):
     return sum(losses)/len(losses)
 
 # Training Hyperbolic
-def train_hyperbolic(encoder, decoder, train_loader, optimizer, criterion):
+def train_hyperbolic(encoder, decoder, train_loader, optimizer):
     losses = []
     for data, _ in train_loader:
         data = data.flatten(start_dim=1).to(device)
         optimizer.zero_grad()
         latent = encoder(data)
         recon = decoder(latent)
-        loss = criterion(recon[..., 1:], data)
+        loss = algebra_object.dist(recon[..., 1:], data).mean()
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
@@ -90,15 +92,18 @@ def train_hyperbolic(encoder, decoder, train_loader, optimizer, criterion):
 # Evaluation function 
 def evaluate_loss(encoder, decoder, test_loader, is_hyperbolic=False):
     encoder.eval(); decoder.eval()
-    criterion = torch.nn.MSELoss()
     with torch.no_grad():
         for data, _ in test_loader:
             data = data.flatten(start_dim=1).to(device)
             recon = decoder(encoder(data))
             if is_hyperbolic:
+                loss = algebra_object.dist(recon[..., 1:], data).mean()
                 recon = recon[..., 1:]
-            loss = criterion(recon, data)
+            else:
+                criterion = torch.nn.MSELoss()
+                loss = criterion(recon, data)
             return loss.item(), recon.cpu(), data.cpu()
+
 
 
 # Visualization
@@ -127,7 +132,7 @@ def visualize_reconstructions(orig_batch, eucl_batch, hyp_batch, lr, layers_str,
 learning_rates = [1e-2,1e-3,1e-4]
 layer_configs = [[100], [100, 50],[100,50,25]]
 hidden_dimension_configs = [5,10,20]
-epochs = 500
+epochs = 20
 early_stop_window = 10
 test_losses = []
 euc_early_stopped = False
@@ -177,10 +182,9 @@ for lr, layers, hd in product(learning_rates, layer_configs, hidden_dimension_co
         #Hyperbolic loop
         print("Hyperbolic Model")
         optimizer = RiemannianAdam(chain(hyp_encoder.parameters(), hyp_decoder.parameters()), lr=lr, weight_decay=1e-4)
-        criterion = torch.nn.MSELoss()
         hyp_encoder.train(); hyp_decoder.train()
         for epoch in range(epochs):
-            h_loss = train_hyperbolic(hyp_encoder, hyp_decoder, train_dataloader, optimizer, criterion)
+            h_loss = train_hyperbolic(hyp_encoder, hyp_decoder, train_dataloader, optimizer)
             hyp_train.append(h_loss)
 
             h_test_loss, _, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
@@ -228,7 +232,6 @@ for lr, layers, hd in product(learning_rates, layer_configs, hidden_dimension_co
         visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", hd, eucl_test[-1], hyp_test[-1])
 
 
-
 # Plot train loss
 plt.figure(figsize=(12, 6))
 for key, loss in all_train_losses.items():
@@ -251,5 +254,5 @@ plt.ylabel("MSE Loss")
 plt.legend()
 plt.grid(True)
 plt.savefig(results_folder/"test_loss_curves.png")
-plt.show()
+plt.show() 
 
