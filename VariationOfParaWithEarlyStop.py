@@ -22,12 +22,12 @@ results_folder = Path('results')
 # Device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 # Load MNIST
 dataset_train = MNIST(root=Path('data/'), download=True, train = True, transform=ToTensor())
 train_dataloader = DataLoader( dataset_train,batch_size=64,shuffle=True,pin_memory=True,drop_last=True)
 dataset_test = MNIST(root=Path('data/'), download=True, train=False, transform=ToTensor())
 test_dataloader = DataLoader(dataset_test,batch_size=10000)
-
 
 # Euclidean autoencoder builder
 def build_euclidean_autoencoder(hidden_layers, latent_dim=5):
@@ -96,13 +96,16 @@ def evaluate_loss(encoder, decoder, test_loader, is_hyperbolic=False):
         for data, _ in test_loader:
             data = data.flatten(start_dim=1).to(device)
             recon = decoder(encoder(data))
+            criterion = torch.nn.MSELoss()
+            mse_loss = criterion(recon[..., 1:] if is_hyperbolic else recon, data)
+
             if is_hyperbolic:
-                loss = algebra_object.dist(recon[..., 1:], data).mean()
+                geo_loss = algebra_object.dist(recon[..., 1:], data).mean()
                 recon = recon[..., 1:]
+                return geo_loss.item(), mse_loss.item(), recon.cpu(), data.cpu()
             else:
-                criterion = torch.nn.MSELoss()
-                loss = criterion(recon, data)
-            return loss.item(), recon.cpu(), data.cpu()
+                return mse_loss.item(), recon.cpu(), data.cpu()
+
 
 
 
@@ -132,7 +135,7 @@ def visualize_reconstructions(orig_batch, eucl_batch, hyp_batch, lr, layers_str,
 learning_rates = [1e-2,1e-3,1e-4]
 layer_configs = [[100], [100, 50],[100,50,25]]
 hidden_dimension_configs = [5,10,20]
-epochs = 20
+epochs = 500
 early_stop_window = 10
 test_losses = []
 euc_early_stopped = False
@@ -187,9 +190,10 @@ for lr, layers, hd in product(learning_rates, layer_configs, hidden_dimension_co
             h_loss = train_hyperbolic(hyp_encoder, hyp_decoder, train_dataloader, optimizer)
             hyp_train.append(h_loss)
 
-            h_test_loss, _, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
-            hyp_test.append(h_test_loss)
-            print(f"Epoch {epoch+1}/{epochs}: Hyperbolic Train={h_loss:.4f} Test={h_test_loss:.4f}")
+            h_test_geo_loss, h_test_mse_loss, _, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
+            hyp_test.append((h_test_geo_loss, h_test_mse_loss))
+
+            print(f"Epoch {epoch+1}/{epochs}: Hyperbolic Train={h_loss:.4f} Geo Test={h_test_geo_loss:.4f} MSE Test={h_test_mse_loss:.4f}")
             
             # Early stopping
             if len(hyp_test) >= early_stop_window + 1 :
@@ -215,21 +219,25 @@ for lr, layers, hd in product(learning_rates, layer_configs, hidden_dimension_co
         all_train_losses[key_h] = hyp_train
         all_test_losses[key_h] = hyp_test
 
+
         # Visualize reconstructions
-        _, e_recon, orig = evaluate_loss(eucl_encoder, eucl_decoder, test_dataloader)
-        _, h_recon, _ = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
-        visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", hd, eucl_test[-1], hyp_test[-1])
+        e_test_loss, e_recon, orig = evaluate_loss(eucl_encoder, eucl_decoder, test_dataloader)
+        h_test_geo_loss, h_test_mse_loss, h_recon, h_orig = evaluate_loss(hyp_encoder, hyp_decoder, test_dataloader, is_hyperbolic=True)
+
+        visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", hd, eucl_test[-1], hyp_test[-1][0])
         import csv
 
         # Create the file
         filename = results_folder/f"Experiment_{exp+1}_losses_lr{lr}_layers{'-'.join(map(str, layers))}_hd{hd}.csv"
         with open(filename, mode='w', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow(["Euclidean Train Loss", "Hyperbolic Train Loss", "Euclidean Test Loss", "Hyperbolic Test Loss"])
-            for et, ht, eTe, hTe in zip(eucl_train, hyp_train, eucl_test, hyp_test):
-                writer.writerow([et, ht, eTe, hTe])
+            writer.writerow(["Euclidean Train Loss", "Hyperbolic Train Loss", "Euclidean Test Loss", "Hyperbolic Geodesic Test Loss", "Hyperbolic MSE Test Loss"])
+            for et, ht, (eTe, hTe_tuple) in zip(eucl_train, hyp_train, zip(eucl_test, hyp_test)):
+                hTe_geo, hTe_mse = hTe_tuple
+                writer.writerow([et, ht, eTe, hTe_geo, hTe_mse])
+
         # Save the losses
-        visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", hd, eucl_test[-1], hyp_test[-1])
+        visualize_reconstructions(orig[:10], e_recon[:10], h_recon[:10], lr, f"{layers}", hd, eucl_test[-1], hyp_test[-1][0])
 
 
 # Plot train loss
