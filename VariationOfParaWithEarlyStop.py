@@ -196,15 +196,15 @@ for lr, layers, hd in product(learning_rates, layer_configs, hidden_dimension_co
             print(f"Epoch {epoch+1}/{epochs}: Hyperbolic Train={h_loss:.4f} Geo Test={h_test_geo_loss:.4f} MSE Test={h_test_mse_loss:.4f}")
             
             # Early stopping
-            if len(hyp_test) >= early_stop_window + 1 :
-                last_hyp_test = hyp_test[-1]
-                prev_hyp_window = hyp_test[-early_stop_window-1:-1]
-
-                if all(last_hyp_test >= prev for prev in prev_hyp_window):
-                    print(f"\n🛑 Early stopping triggered at epoch {epoch + 1}")
+            if len(hyp_test) >= early_stop_window + 1:
+                last_hyp_test_geo = hyp_test[-1][0]
+                prev_hyp_geo_window = [x[0] for x in hyp_test[-early_stop_window-1:-1]]
+                
+                if all(last_hyp_test_geo >= prev for prev in prev_hyp_geo_window):
+                    print(f"\n🛑 Early stopping triggered at epoch {epoch + 1} based on geodesic test loss")
                     hyp_early_stopped = True
-                    for i in range (epoch+1, 100):
-                        hyp_test.append(last_hyp_test) 
+                    for i in range(epoch+1, 100):
+                        hyp_test.append(hyp_test[-1])  
                         hyp_train.append(hyp_train[-1])
                     break
         if not hyp_early_stopped:
